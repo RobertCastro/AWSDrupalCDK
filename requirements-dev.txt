@@ -1,4 +1,4 @@
 aws-cdk-lib>=2.0.0
 constructs>=10.0.0
-pytest==6.2.5
-aws-cdk.aws-ecs-patterns>=2.0.0
+pytest~=7.4.0
+pytest-cov~=4.1.0

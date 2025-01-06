@@ -1,15 +1,9 @@
-import aws_cdk as core
-import aws_cdk.assertions as assertions
+# tests/unit/test_aws_drupal_cdk_stack.py
+import aws_cdk as cdk
+import pytest
+from aws_drupal_cdk.stacks.network_stack import NetworkStack
 
-from aws_drupal_cdk.aws_drupal_cdk_stack import AwsDrupalCdkStack
-
-# example tests. To run these tests, uncomment this file along with the example
-# resource in aws_drupal_cdk/aws_drupal_cdk_stack.py
-def test_sqs_queue_created():
-    app = core.App()
-    stack = AwsDrupalCdkStack(app, "aws-drupal-cdk")
-    template = assertions.Template.from_stack(stack)
-
-#     template.has_resource_properties("AWS::SQS::Queue", {
-#         "VisibilityTimeout": 300
-#     })
+def test_vpc_creation():
+    app = cdk.App()
+    stack = NetworkStack(app, "TestStack")
+    assert stack is not None
