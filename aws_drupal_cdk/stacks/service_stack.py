@@ -32,8 +32,7 @@ class DrupalServiceStack(Stack):
         self.cluster = ecs.Cluster(
             self, "DrupalCluster",
             vpc=vpc,
-            container_insights=True,
-            capacity_providers=["FARGATE", "FARGATE_SPOT"]
+            container_insights=True
         )
 
         # EFS mejorado con backup automático y encryption
