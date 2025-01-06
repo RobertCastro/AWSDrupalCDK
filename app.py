@@ -1,28 +1,49 @@
 #!/usr/bin/env python3
 import os
-
 import aws_cdk as cdk
-
-from aws_drupal_cdk.aws_drupal_cdk_stack import AwsDrupalCdkStack
-
+from aws_drupal_cdk.stacks.network_stack import NetworkStack
+from aws_drupal_cdk.stacks.database_stack import DatabaseStack
+from aws_drupal_cdk.stacks.service_stack import DrupalServiceStack
+from aws_drupal_cdk.stacks.backup_stack import BackupStack
+from aws_drupal_cdk.stacks.pipeline_stack import PipelineStack
 
 app = cdk.App()
-AwsDrupalCdkStack(app, "AwsDrupalCdkStack",
-    # If you don't specify 'env', this stack will be environment-agnostic.
-    # Account/Region-dependent features and context lookups will not work,
-    # but a single synthesized template can be deployed anywhere.
 
-    # Uncomment the next line to specialize this stack for the AWS Account
-    # and Region that are implied by the current CLI configuration.
+# Configurar el entorno
+env = cdk.Environment(
+    account=os.getenv('CDK_DEFAULT_ACCOUNT'),
+    region=os.getenv('CDK_DEFAULT_REGION')
+)
 
-    #env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION')),
+# Crear stacks
+network_stack = NetworkStack(app, "AwsDrupalNetworkStack",
+    env=env
+)
 
-    # Uncomment the next line if you know exactly what Account and Region you
-    # want to deploy the stack to. */
+db_stack = DatabaseStack(app, "AwsDrupalDatabaseStack",
+    vpc=network_stack.vpc,
+    env=env
+)
 
-    #env=cdk.Environment(account='123456789012', region='us-east-1'),
+service_stack = DrupalServiceStack(app, "AwsDrupalServiceStack",
+    vpc=network_stack.vpc,
+    database=db_stack.cluster,
+    env=env
+)
 
-    # For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html
-    )
+backup_stack = BackupStack(app, "AwsDrupalBackupStack",
+    database=db_stack.cluster,
+    file_system=service_stack.file_system,
+    env=env
+)
+
+pipeline_stack = PipelineStack(app, "AwsDrupalPipelineStack",
+    service=service_stack.service,
+    env=env
+)
+
+# Tags globales para todos los stacks
+cdk.Tags.of(app).add("Project", "AWSDrupalCDK")
+cdk.Tags.of(app).add("Environment", "Production")
 
 app.synth()

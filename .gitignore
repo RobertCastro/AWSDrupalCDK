@@ -8,3 +8,8 @@ __pycache__
 # CDK asset staging directory
 .cdk.staging
 cdk.out
+
+# Drupal
+docker/drupal/web/sites/*/settings*.php
+docker/drupal/web/sites/*/files
+docker/drupal/web/sites/*/private
