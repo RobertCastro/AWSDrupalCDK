@@ -109,13 +109,20 @@ class DrupalServiceStack(Stack):
                 "DB_USER": ecs.Secret.from_secrets_manager(database.secret, "username"),
                 "DB_PASSWORD": ecs.Secret.from_secrets_manager(database.secret, "password")
             },
-            health_check={
-                "command": ["CMD-SHELL", "curl -f http://localhost/health || exit 1"],
-                "interval": Duration.seconds(30),
-                "timeout": Duration.seconds(5),
-                "retries": 3,
-                "startup_period": Duration.seconds(60)
-            }
+            health_check=ecs.HealthCheck(
+                command=["CMD-SHELL", "curl -f http://localhost/health || exit 1"],
+                interval=Duration.seconds(30),
+                timeout=Duration.seconds(5),
+                retries=3
+            )
+        )
+
+        # Agregar mapeo de puertos
+        drupal_container.add_port_mappings(
+            ecs.PortMapping(
+                container_port=80,
+                protocol=ecs.Protocol.TCP
+            )
         )
 
         drupal_container.add_mount_points(
