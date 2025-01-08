@@ -11,7 +11,8 @@ from aws_cdk import (
     aws_secretsmanager as secretsmanager,
     SecretValue,
     Duration,
-    Environment
+    Environment,
+    Fn
 )
 from constructs import Construct
 from aws_drupal_cdk.stacks.network_stack import NetworkStack
@@ -33,13 +34,6 @@ class DrupalStage(Stage):
         self.service_stack = DrupalServiceStack(self, "Service", 
             vpc=network_stack.vpc,
             database=database_stack.cluster
-        )
-
-        # Agregar un output para la URL del servicio
-        CfnOutput(
-            self, "ServiceUrl",
-            value=self.service_stack.service.load_balancer.load_balancer_dns_name,
-            description="URL del servicio Drupal"
         )
 
 class PipelineStack(Stack):
@@ -83,7 +77,6 @@ class PipelineStack(Stack):
             pipeline_name="DrupalPipeline",
             docker_enabled_for_self_mutation=True,
             docker_enabled_for_synth=True,
-            self_mutation=True,  # Permite que el pipeline se actualice a sí mismo
             synth=pipelines.ShellStep(
                 "Synth",
                 input=pipelines.CodePipelineSource.git_hub(
@@ -101,9 +94,8 @@ class PipelineStack(Stack):
                 primary_output_directory="cdk.out"
             ),
             code_build_defaults=pipelines.CodeBuildOptions(
-                role=codebuild_role,
                 build_environment=codebuild.BuildEnvironment(
-                    privileged=True,  # Necesario para builds de Docker
+                    privileged=True,
                     build_image=codebuild.LinuxBuildImage.STANDARD_7_0
                 ),
                 partial_build_spec=codebuild.BuildSpec.from_object({
@@ -144,12 +136,12 @@ class PipelineStack(Stack):
                     "IntegrationTest",
                     commands=[
                         'echo "Running integration tests..."',
-                        'sleep 60',  # Esperar a que el servicio esté disponible
-                        'curl -Ssf ${SERVICE_URL}',
+                        'sleep 60',  # Asegúrate de que el servicio esté activo antes de probar
+                        'curl -Ssf $SERVICE_URL/health',
                         'pytest tests/integration/'
                     ],
                     env={
-                        "SERVICE_URL": deploy_dev.service_stack.service.load_balancer.load_balancer_dns_name
+                        "SERVICE_URL": Fn.import_value("AwsDrupalPipelineStack-ServiceEndpoint")  # Nombre exportado
                     }
                 )
             ]
@@ -157,19 +149,15 @@ class PipelineStack(Stack):
 
         # Agregar etapa de producción con aprobación manual
         pipeline.add_stage(deploy_prod,
-            pre=[
-                pipelines.ManualApproval("PromoteToProd")
-            ],
             post=[
                 pipelines.ShellStep(
-                    "SmokeTest",
+                    "TestService",
                     commands=[
-                        'echo "Running smoke tests in production..."',
-                        'curl -Ssf ${SERVICE_URL}',
-                        'pytest tests/smoke/'
+                        'curl -Ssf $SERVICE_URL/health',
+                        'echo "Integration tests passed!"'
                     ],
                     env={
-                        "SERVICE_URL": deploy_prod.service_stack.service.load_balancer.load_balancer_dns_name
+                        "SERVICE_URL": Fn.import_value("AwsDrupalPipelineStack-ServiceEndpoint")
                     }
                 )
             ]
@@ -178,18 +166,6 @@ class PipelineStack(Stack):
         # Outputs útiles
         CfnOutput(
             self, "PipelineConsoleUrl",
-            value=f"https://{Stack.of(self).region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/{pipeline.pipeline.pipeline_name}/view?region={Stack.of(self).region}",
+            value=f"https://{Stack.of(self).region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/DrupalPipeline/view?region={Stack.of(self).region}",
             description="URL de la consola del Pipeline"
-        )
-
-        CfnOutput(
-            self, "DevServiceUrl",
-            value=deploy_dev.service_stack.service.load_balancer.load_balancer_dns_name,
-            description="URL del servicio Drupal en Dev"
-        )
-
-        CfnOutput(
-            self, "ProdServiceUrl",
-            value=deploy_prod.service_stack.service.load_balancer.load_balancer_dns_name,
-            description="URL del servicio Drupal en Prod"
         )

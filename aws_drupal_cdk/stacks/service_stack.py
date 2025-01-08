@@ -15,7 +15,8 @@ from aws_cdk import (
     Duration,
     RemovalPolicy,
     CfnOutput,
-    SecretValue
+    SecretValue,
+    Fn
 )
 from constructs import Construct
 
@@ -217,7 +218,7 @@ class DrupalServiceStack(Stack):
             self, "ServiceEndpoint",
             value=self.service.load_balancer.load_balancer_dns_name,
             description="Endpoint del servicio Drupal",
-            export_name="DrupalServiceEndpoint"
+            export_name=f"{construct_id}-ServiceEndpoint"
         )
 
         CfnOutput(
