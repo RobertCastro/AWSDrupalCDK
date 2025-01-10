@@ -141,7 +141,7 @@ class PipelineStack(Stack):
                         'pytest tests/integration/'
                     ],
                     env={
-                        "SERVICE_URL": Fn.import_value("AwsDrupalPipelineStack-ServiceEndpoint")  # Nombre exportado
+                        "SERVICE_URL": Fn.import_value("AwsDrupalServiceStack-ServiceEndpoint")  # Nombre exportado
                     }
                 )
             ]
@@ -157,7 +157,7 @@ class PipelineStack(Stack):
                         'echo "Integration tests passed!"'
                     ],
                     env={
-                        "SERVICE_URL": Fn.import_value("AwsDrupalPipelineStack-ServiceEndpoint")
+                        "SERVICE_URL": Fn.import_value("AwsDrupalServiceStack-ServiceEndpoint")
                     }
                 )
             ]

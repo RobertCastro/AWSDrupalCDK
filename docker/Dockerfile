@@ -1,5 +1,5 @@
 # docker/Dockerfile
-FROM drupal:10-apache
+FROM --platform=linux/amd64 drupal:10-apache
 
 # Instalar dependencias del sistema y PHP
 RUN apt-get update && apt-get install -y \

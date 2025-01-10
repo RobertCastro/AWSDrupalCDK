@@ -218,7 +218,7 @@ class DrupalServiceStack(Stack):
             self, "ServiceEndpoint",
             value=self.service.load_balancer.load_balancer_dns_name,
             description="Endpoint del servicio Drupal",
-            export_name=f"{construct_id}-ServiceEndpoint"
+            export_name="AwsDrupalServiceStack-ServiceEndpoint"
         )
 
         CfnOutput(
