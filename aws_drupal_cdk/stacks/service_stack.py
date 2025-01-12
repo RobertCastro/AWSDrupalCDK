@@ -15,7 +15,6 @@ from aws_cdk import (
     aws_route53 as route53,
     aws_route53_targets as targets,
     aws_elasticloadbalancingv2 as elbv2,
-    aws_ecr_assets as ecr_assets,
     Duration,
     RemovalPolicy,
     CfnOutput,
@@ -23,7 +22,6 @@ from aws_cdk import (
     Fn
 )
 from constructs import Construct
-from aws_cdk.aws_ecr_assets import DockerImageAsset, Platform
 
 class DrupalServiceStack(Stack):
     def __init__(
@@ -32,6 +30,7 @@ class DrupalServiceStack(Stack):
         construct_id: str,
         vpc: ec2.IVpc,
         database: rds.IDatabaseCluster,
+        repository: ecr.IRepository,
         domain_name: str = None,
         certificate_arn: str = None,
         **kwargs
@@ -112,15 +111,14 @@ class DrupalServiceStack(Stack):
             )
         )
 
-        # Permisos necesarios para ECR en la Task y Execution Role
+        # Permisos necesarios para ECR
         task_definition.add_to_task_role_policy(
             iam.PolicyStatement(
                 actions=[
                     "ecr:GetAuthorizationToken",
                     "ecr:BatchCheckLayerAvailability",
                     "ecr:GetDownloadUrlForLayer",
-                    "ecr:BatchGetImage",
-                    "ecr:PutImage"
+                    "ecr:BatchGetImage"
                 ],
                 resources=["*"]
             )
@@ -132,48 +130,22 @@ class DrupalServiceStack(Stack):
                     "ecr:BatchCheckLayerAvailability",
                     "ecr:GetDownloadUrlForLayer",
                     "ecr:BatchGetImage",
-                    "ecr:PutImage"
+                    "ecr:ListImages",
+                    "secretsmanager:GetSecretValue",
+                    "ssm:GetParameters",
+                    "kms:Decrypt"
                 ],
                 resources=["*"]
             )
         )
 
-        # --- Crear repositorio ECR propio y mutable ---
-        repository = ecr.Repository(
-            self, "DrupalRepository",
-            repository_name="drupal-repository",
-            image_tag_mutability=ecr.TagMutability.MUTABLE,  # Importante
-            image_scan_on_push=True,
-            removal_policy=RemovalPolicy.RETAIN,
-        )
+        # Asegurar que la imagen existe en el repositorio
+        repository.grant_pull(task_definition.execution_role)
 
-        # Regla de ciclo de vida: solo un máximo de 1 imagen
-        repository.add_lifecycle_rule(
-            max_image_count=1,
-            rule_priority=1,
-            tag_status=ecr.TagStatus.ANY
-        )
-
-        # --- Crear DockerImageAsset en el REPO anterior ---
-        #   Esto forza que el CDK use tu repositorio 'drupal-repository'
-        #   en lugar del cdk-hnb659fds-container-assets inmutable.
-        asset = DockerImageAsset(
-            self,
-            "DrupalDockerAsset",
-            directory="docker",
-            platform=Platform.LINUX_AMD64,
-            # Con "repository_name" el asset se publicará en tu repo 'drupal-repository'
-            build_args={
-                "DOCKER_BUILDKIT": "1",
-                "BUILDKIT_INLINE_CACHE": "1"
-            },
-        )
-
-        # --- Container principal de Drupal usando la imagen del asset ---
+        # --- Container principal de Drupal ---
         drupal_container = task_definition.add_container(
             "drupal",
-            # Aquí usamos la imagen del DockerImageAsset
-            image=ecs.ContainerImage.from_docker_image_asset(asset),
+            image=ecs.ContainerImage.from_ecr_repository(repository, "latest"),
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="drupal",
                 mode=ecs.AwsLogDriverMode.NON_BLOCKING
@@ -197,7 +169,8 @@ class DrupalServiceStack(Stack):
                 command=["CMD-SHELL", "curl -f http://localhost/health || exit 1"],
                 interval=Duration.seconds(30),
                 timeout=Duration.seconds(5),
-                retries=3
+                retries=3,
+                start_period=Duration.seconds(90)  # Dar más tiempo para el inicio inicial
             )
         )
 
@@ -224,7 +197,13 @@ class DrupalServiceStack(Stack):
             ) if certificate_arn else None,
             protocol=elbv2.ApplicationProtocol.HTTPS if certificate_arn else elbv2.ApplicationProtocol.HTTP,
             public_load_balancer=True,
-            assign_public_ip=False
+            assign_public_ip=False,
+            deployment_controller=ecs.DeploymentController(
+                type=ecs.DeploymentControllerType.ECS
+            ),
+            circuit_breaker=ecs.DeploymentCircuitBreaker(
+                rollback=True
+            )
         )
 
         # Permitir acceso al EFS desde la task
@@ -317,4 +296,10 @@ class DrupalServiceStack(Stack):
             "ECRRepositoryURI",
             value=repository.repository_uri,
             description="URI del repositorio ECR"
+        )
+        CfnOutput(
+            self,
+            "TaskDefinitionArn",
+            value=task_definition.task_definition_arn,
+            description="ARN de la definición de tarea"
         )
