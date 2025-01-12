@@ -6,15 +6,14 @@ from aws_cdk import (
     pipelines,
     aws_codebuild as codebuild,
     aws_codepipeline as codepipeline,
-    aws_ecs_patterns as ecs_patterns,
     aws_iam as iam,
     aws_secretsmanager as secretsmanager,
     SecretValue,
     Duration,
-    Environment,
     Fn
 )
 from constructs import Construct
+
 from aws_drupal_cdk.stacks.network_stack import NetworkStack
 from aws_drupal_cdk.stacks.database_stack import DatabaseStack
 from aws_drupal_cdk.stacks.service_stack import DrupalServiceStack
@@ -22,28 +21,24 @@ from aws_drupal_cdk.stacks.service_stack import DrupalServiceStack
 class DrupalStage(Stage):
     def __init__(self, scope: Construct, construct_id: str, **kwargs):
         super().__init__(scope, construct_id, **kwargs)
-        
-        # Crear los stacks para la etapa
+
         network_stack = NetworkStack(self, "Network")
         
         database_stack = DatabaseStack(self, "Database",
             vpc=network_stack.vpc
         )
-        
-        # Guardar el service_stack como atributo para poder acceder a él desde fuera
+
         self.service_stack = DrupalServiceStack(self, "Service", 
             vpc=network_stack.vpc,
             database=database_stack.cluster
         )
 
+        self.service_endpoint = self.service_stack.service_endpoint_output
+
 class PipelineStack(Stack):
-    def __init__(self, scope: Construct, 
-                 construct_id: str, 
-                 service: ecs_patterns.ApplicationLoadBalancedFargateService,
-                 **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # Role para CodeBuild con permisos necesarios
         codebuild_role = iam.Role(
             self, "CodeBuildRole",
             assumed_by=iam.ServicePrincipal("codebuild.amazonaws.com")
@@ -52,26 +47,28 @@ class PipelineStack(Stack):
         codebuild_role.add_managed_policy(
             iam.ManagedPolicy.from_aws_managed_policy_name("AWSCodeBuildAdminAccess")
         )
-        
-        # Agregar políticas adicionales necesarias
+
         codebuild_role.add_to_policy(
             iam.PolicyStatement(
                 actions=[
                     "ecr:GetAuthorizationToken",
                     "ecr:BatchCheckLayerAvailability",
-                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:CompleteLayerUpload",
+                    "ecr:UploadLayerPart",
+                    "ecr:PutImage",
+                    "ecr:CreateRepository",
+                    "ecr:PutLifecyclePolicy",
                     "ecr:GetRepositoryPolicy",
-                    "ecr:DescribeRepositories",
                     "ecr:ListImages",
-                    "ecr:DescribeImages",
-                    "ecr:BatchGetImage",
-                    "ecr:PutImage"
+                    "ecr:DescribeRepositories",
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:InitiateLayerUpload",
+                    "ecr:GetDownloadUrlForLayer"
                 ],
                 resources=["*"]
             )
         )
 
-        # Pipeline mejorado con soporte para Docker
         pipeline = pipelines.CodePipeline(
             self, "DrupalPipeline",
             pipeline_name="DrupalPipeline",
@@ -80,7 +77,7 @@ class PipelineStack(Stack):
             synth=pipelines.ShellStep(
                 "Synth",
                 input=pipelines.CodePipelineSource.git_hub(
-                    "RobertCastro/AWSDrupalCDK",  # Reemplazar con tu repositorio
+                    "RobertCastro/AWSDrupalCDK",
                     "main",
                     authentication=SecretValue.secrets_manager("github-token")
                 ),
@@ -103,7 +100,7 @@ class PipelineStack(Stack):
                     "phases": {
                         "install": {
                             "runtime-versions": {
-                                "python": "3.12",
+                                "python": "3.11",
                                 "nodejs": "20"
                             }
                         }
@@ -112,19 +109,18 @@ class PipelineStack(Stack):
             )
         )
 
-        # Crear etapas de desarrollo y producción
-        deploy_dev = DrupalStage(
+        dev_stage = DrupalStage(
             self, "Dev",
             env=kwargs.get("env")
         )
 
-        deploy_prod = DrupalStage(
+        prod_stage = DrupalStage(
             self, "Prod",
             env=kwargs.get("env")
         )
 
-        # Agregar etapa de desarrollo con pruebas
-        pipeline.add_stage(deploy_dev,
+        pipeline.add_stage(
+            dev_stage,
             pre=[
                 pipelines.ShellStep(
                     "UnitTest",
@@ -136,19 +132,19 @@ class PipelineStack(Stack):
                     "IntegrationTest",
                     commands=[
                         'echo "Running integration tests..."',
-                        'sleep 60',  # Asegúrate de que el servicio esté activo antes de probar
+                        'sleep 280',
                         'curl -Ssf $SERVICE_URL/health',
                         'pytest tests/integration/'
                     ],
-                    env={
-                        "SERVICE_URL": Fn.import_value("AwsDrupalServiceStack-ServiceEndpoint")  # Nombre exportado
+                    env_from_cfn_outputs={
+                        "SERVICE_URL": dev_stage.service_endpoint
                     }
                 )
             ]
         )
 
-        # Agregar etapa de producción con aprobación manual
-        pipeline.add_stage(deploy_prod,
+        pipeline.add_stage(
+            prod_stage,
             post=[
                 pipelines.ShellStep(
                     "TestService",
@@ -156,16 +152,15 @@ class PipelineStack(Stack):
                         'curl -Ssf $SERVICE_URL/health',
                         'echo "Integration tests passed!"'
                     ],
-                    env={
-                        "SERVICE_URL": Fn.import_value("AwsDrupalServiceStack-ServiceEndpoint")
+                    env_from_cfn_outputs={
+                        "SERVICE_URL": prod_stage.service_endpoint
                     }
                 )
             ]
         )
 
-        # Outputs útiles
         CfnOutput(
             self, "PipelineConsoleUrl",
-            value=f"https://{Stack.of(self).region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/DrupalPipeline/view?region={Stack.of(self).region}",
+            value=f"https://{self.region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/DrupalPipeline/view?region={self.region}",
             description="URL de la consola del Pipeline"
         )

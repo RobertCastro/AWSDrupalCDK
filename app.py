@@ -16,31 +16,27 @@ env = cdk.Environment(
 )
 
 # Crear stacks
-network_stack = NetworkStack(app, "AwsDrupalNetworkStack",
-    env=env
-)
-
-db_stack = DatabaseStack(app, "AwsDrupalDatabaseStack",
-    vpc=network_stack.vpc,
-    env=env
-)
-
+# 1. Crear stacks base
+network_stack = NetworkStack(app, "AwsDrupalNetworkStack", env=env)
+db_stack = DatabaseStack(app, "AwsDrupalDatabaseStack", vpc=network_stack.vpc, env=env)
 service_stack = DrupalServiceStack(app, "AwsDrupalServiceStack",
-    vpc=network_stack.vpc,
-    database=db_stack.cluster,
-    env=env
-)
-
+                                   vpc=network_stack.vpc,
+                                   database=db_stack.cluster,
+                                   env=env)
 backup_stack = BackupStack(app, "AwsDrupalBackupStack",
-    database=db_stack.cluster,
-    file_system=service_stack.file_system,
+                           database=db_stack.cluster,
+                           file_system=service_stack.file_system,
+                           env=env)
+
+# 2. Crear pipeline
+pipeline_stack = PipelineStack(
+    app,
+    "AwsDrupalPipelineStack",
     env=env
 )
 
-pipeline_stack = PipelineStack(app, "AwsDrupalPipelineStack",
-    service=service_stack.service,
-    env=env
-)
+# 3. Establecer que pipeline depende de service
+pipeline_stack.add_dependency(service_stack)
 
 # Tags globales para todos los stacks
 cdk.Tags.of(app).add("Project", "AWSDrupalCDK")

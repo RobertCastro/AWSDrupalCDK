@@ -35,7 +35,7 @@ class DatabaseStack(Stack):
         self.cluster = rds.DatabaseCluster(
             self, "DrupalDB",
             engine=rds.DatabaseClusterEngine.aurora_mysql(
-                version=rds.AuroraMysqlEngineVersion.VER_2_11_2  # Corregido a VER_2_11_2
+                version=rds.AuroraMysqlEngineVersion.VER_3_04_0  # Versión corregida
             ),
             credentials=rds.Credentials.from_secret(self.database_secret),
             instance_props=rds.InstanceProps(
@@ -44,7 +44,7 @@ class DatabaseStack(Stack):
                     ec2.InstanceSize.MEDIUM
                 ),
                 vpc_subnets=ec2.SubnetSelection(
-                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS  # Actualizado a PRIVATE_WITH_EGRESS
+                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
                 ),
                 vpc=vpc,
                 security_groups=[self.db_security_group]

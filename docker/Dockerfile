@@ -1,5 +1,9 @@
 # docker/Dockerfile
-FROM --platform=linux/amd64 drupal:10-apache
+# Usar sintaxis de BuildKit
+# syntax=docker/dockerfile:1
+
+# Especificar la plataforma explícitamente
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/drupal:10.2.4-apache
 
 # Instalar dependencias del sistema y PHP
 RUN apt-get update && apt-get install -y \
@@ -12,16 +16,35 @@ RUN apt-get update && apt-get install -y \
     netcat-traditional \
     default-mysql-client \
     redis-tools \
+    libxml2-dev \
+    libgmp-dev \
+    libfreetype6-dev \
+    libjpeg62-turbo-dev \
+    libwebp-dev \
     && docker-php-ext-install -j$(nproc) \
         gd \
         zip \
         pdo_mysql \
         opcache \
+        soap \
+        gmp \
+        exif \
+        bcmath \
+        calendar \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
+    && docker-php-ext-install -j$(nproc) gd \
     && pecl install redis \
-    && docker-php-ext-enable redis opcache \
+    && docker-php-ext-enable \
+        redis \
+        opcache \
+        soap \
+        gmp \
+        exif \
+        bcmath \
+        calendar \
     && rm -rf /var/lib/apt/lists/*
 
-# Configurar PHP para producción
+# El resto del Dockerfile se mantiene igual
 RUN { \
         echo 'opcache.memory_consumption=128'; \
         echo 'opcache.interned_strings_buffer=8'; \

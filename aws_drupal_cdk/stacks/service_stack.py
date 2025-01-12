@@ -1,10 +1,13 @@
 # aws_drupal_cdk/stacks/service_stack.py
+
 from aws_cdk import (
     Stack,
     aws_ecs as ecs,
     aws_ec2 as ec2,
     aws_efs as efs,
     aws_rds as rds,
+    aws_iam as iam,
+    aws_ecr as ecr,
     aws_elasticache as elasticache,
     aws_certificatemanager as acm,
     aws_ecs_patterns as ecs_patterns,
@@ -12,6 +15,7 @@ from aws_cdk import (
     aws_route53 as route53,
     aws_route53_targets as targets,
     aws_elasticloadbalancingv2 as elbv2,
+    aws_ecr_assets as ecr_assets,
     Duration,
     RemovalPolicy,
     CfnOutput,
@@ -19,24 +23,37 @@ from aws_cdk import (
     Fn
 )
 from constructs import Construct
+from aws_cdk.aws_ecr_assets import DockerImageAsset, Platform
 
 class DrupalServiceStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, 
-                 vpc: ec2.IVpc, 
-                 database: rds.IDatabaseCluster, 
-                 domain_name: str = None,
-                 certificate_arn: str = None,
-                 **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        vpc: ec2.IVpc,
+        database: rds.IDatabaseCluster,
+        domain_name: str = None,
+        certificate_arn: str = None,
+        **kwargs
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # Cluster ECS con capacity providers
+        # --- ECS Cluster ---
         self.cluster = ecs.Cluster(
             self, "DrupalCluster",
             vpc=vpc,
             container_insights=True
         )
 
-        # EFS mejorado con backup automático y encryption
+        # --- Security Group para EFS ---
+        efs_security_group = ec2.SecurityGroup(
+            self, "EFSSecurityGroup",
+            vpc=vpc,
+            description="Security group for Drupal EFS",
+            allow_all_outbound=True
+        )
+
+        # --- EFS ---
         self.file_system = efs.FileSystem(
             self, "DrupalFiles",
             vpc=vpc,
@@ -45,22 +62,16 @@ class DrupalServiceStack(Stack):
             encrypted=True,
             removal_policy=RemovalPolicy.RETAIN,
             enable_automatic_backups=True,
-            security_group=ec2.SecurityGroup(
-                self, "EFSSecurityGroup",
-                vpc=vpc,
-                description="Security group for Drupal EFS",
-                allow_all_outbound=True
-            )
+            security_group=efs_security_group
         )
 
-        # Redis para caché con configuración mejorada
+        # --- Redis (ElastiCache) ---
         cache_security_group = ec2.SecurityGroup(
             self, "RedisSecurityGroup",
             vpc=vpc,
             description="Security group for Redis",
             allow_all_outbound=True
         )
-
         cache_subnet_group = elasticache.CfnSubnetGroup(
             self, "RedisCacheSubnetGroup",
             subnet_ids=vpc.select_subnets(
@@ -68,7 +79,6 @@ class DrupalServiceStack(Stack):
             ).subnet_ids,
             description="Subnet group for Redis cache"
         )
-
         self.redis = elasticache.CfnReplicationGroup(
             self, "DrupalRedis",
             replication_group_description="Redis cache for Drupal",
@@ -84,7 +94,7 @@ class DrupalServiceStack(Stack):
             transit_encryption_enabled=True
         )
 
-        # Task Definition con configuración mejorada
+        # --- Task Definition (Fargate) ---
         task_definition = ecs.FargateTaskDefinition(
             self, "DrupalTaskDef",
             cpu=1024,
@@ -92,10 +102,78 @@ class DrupalServiceStack(Stack):
             ephemeral_storage_gib=30
         )
 
-        # Configurar el contenedor principal
+        # Volume EFS en la Task
+        task_definition.add_volume(
+            name="drupal-files",
+            efs_volume_configuration=ecs.EfsVolumeConfiguration(
+                file_system_id=self.file_system.file_system_id,
+                root_directory='/',
+                transit_encryption="ENABLED"
+            )
+        )
+
+        # Permisos necesarios para ECR en la Task y Execution Role
+        task_definition.add_to_task_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "ecr:GetAuthorizationToken",
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                    "ecr:PutImage"
+                ],
+                resources=["*"]
+            )
+        )
+        task_definition.add_to_execution_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "ecr:GetAuthorizationToken",
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                    "ecr:PutImage"
+                ],
+                resources=["*"]
+            )
+        )
+
+        # --- Crear repositorio ECR propio y mutable ---
+        repository = ecr.Repository(
+            self, "DrupalRepository",
+            repository_name="drupal-repository",
+            image_tag_mutability=ecr.TagMutability.MUTABLE,  # Importante
+            image_scan_on_push=True,
+            removal_policy=RemovalPolicy.RETAIN,
+        )
+
+        # Regla de ciclo de vida: solo un máximo de 1 imagen
+        repository.add_lifecycle_rule(
+            max_image_count=1,
+            rule_priority=1,
+            tag_status=ecr.TagStatus.ANY
+        )
+
+        # --- Crear DockerImageAsset en el REPO anterior ---
+        #   Esto forza que el CDK use tu repositorio 'drupal-repository'
+        #   en lugar del cdk-hnb659fds-container-assets inmutable.
+        asset = DockerImageAsset(
+            self,
+            "DrupalDockerAsset",
+            directory="docker",
+            platform=Platform.LINUX_AMD64,
+            # Con "repository_name" el asset se publicará en tu repo 'drupal-repository'
+            build_args={
+                "DOCKER_BUILDKIT": "1",
+                "BUILDKIT_INLINE_CACHE": "1"
+            },
+        )
+
+        # --- Container principal de Drupal usando la imagen del asset ---
         drupal_container = task_definition.add_container(
             "drupal",
-            image=ecs.ContainerImage.from_asset("docker"),
+            # Aquí usamos la imagen del DockerImageAsset
+            image=ecs.ContainerImage.from_docker_image_asset(asset),
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="drupal",
                 mode=ecs.AwsLogDriverMode.NON_BLOCKING
@@ -104,7 +182,12 @@ class DrupalServiceStack(Stack):
                 "REDIS_HOST": self.redis.attr_primary_end_point_address,
                 "DB_HOST": database.cluster_endpoint.hostname,
                 "DB_NAME": "drupal",
-                "DRUPAL_ENV": "production"
+                "DRUPAL_ENV": "production",
+                "PHP_MEMORY_LIMIT": "512M",
+                "PHP_MAX_EXECUTION_TIME": "300",
+                "PHP_POST_MAX_SIZE": "64M",
+                "PHP_UPLOAD_MAX_FILESIZE": "64M",
+                "PHP_MAX_INPUT_VARS": "4000"
             },
             secrets={
                 "DB_USER": ecs.Secret.from_secrets_manager(database.secret, "username"),
@@ -118,12 +201,8 @@ class DrupalServiceStack(Stack):
             )
         )
 
-        # Agregar mapeo de puertos
         drupal_container.add_port_mappings(
-            ecs.PortMapping(
-                container_port=80,
-                protocol=ecs.Protocol.TCP
-            )
+            ecs.PortMapping(container_port=80)
         )
 
         drupal_container.add_mount_points(
@@ -134,7 +213,7 @@ class DrupalServiceStack(Stack):
             )
         )
 
-        # Configurar el servicio Fargate
+        # --- Fargate Service con ALB ---
         self.service = ecs_patterns.ApplicationLoadBalancedFargateService(
             self, "DrupalService",
             cluster=self.cluster,
@@ -148,7 +227,18 @@ class DrupalServiceStack(Stack):
             assign_public_ip=False
         )
 
-        # Configurar health check del target group
+        # Permitir acceso al EFS desde la task
+        efs_security_group.add_ingress_rule(
+            peer=ec2.SecurityGroup.from_security_group_id(
+                self,
+                "TaskSecurityGroup",
+                security_group_id=self.service.service.connections.security_groups[0].security_group_id
+            ),
+            connection=ec2.Port.tcp(2049),
+            description="Allow ECS tasks to access EFS"
+        )
+
+        # Configurar health check del ALB
         self.service.target_group.configure_health_check(
             path="/health",
             healthy_http_codes="200-299",
@@ -158,19 +248,17 @@ class DrupalServiceStack(Stack):
             unhealthy_threshold_count=3
         )
 
-        # Auto-scaling mejorado
+        # Auto-scaling
         scaling = self.service.service.auto_scale_task_count(
             max_capacity=6,
             min_capacity=2
         )
-
         scaling.scale_on_cpu_utilization(
             "CpuScaling",
             target_utilization_percent=75,
             scale_in_cooldown=Duration.seconds(300),
             scale_out_cooldown=Duration.seconds(300)
         )
-
         scaling.scale_on_memory_utilization(
             "MemoryScaling",
             target_utilization_percent=75,
@@ -178,7 +266,7 @@ class DrupalServiceStack(Stack):
             scale_out_cooldown=Duration.seconds(300)
         )
 
-        # Alarmas de CloudWatch
+        # Alarmas
         cloudwatch.Alarm(
             self, "DrupalServiceHighCPU",
             metric=self.service.service.metric_cpu_utilization(),
@@ -186,7 +274,6 @@ class DrupalServiceStack(Stack):
             threshold=90,
             alarm_description="CPU utilization is too high"
         )
-
         cloudwatch.Alarm(
             self, "DrupalService5XX",
             metric=self.service.load_balancer.metric_http_code_target(
@@ -197,13 +284,12 @@ class DrupalServiceStack(Stack):
             alarm_description="Too many 5XX errors"
         )
 
-        # DNS Record si se proporciona dominio
+        # DNS (opcional si tienes HostedZone)
         if domain_name:
             zone = route53.HostedZone.from_lookup(
                 self, "Zone",
                 domain_name=domain_name
             )
-
             route53.ARecord(
                 self, "DrupalAliasRecord",
                 zone=zone,
@@ -213,17 +299,22 @@ class DrupalServiceStack(Stack):
                 record_name=domain_name
             )
 
-        # Outputs
-        CfnOutput(
-            self, "ServiceEndpoint",
+        # Salidas
+        self.service_endpoint_output = CfnOutput(
+            self,
+            "ServiceEndpoint",
             value=self.service.load_balancer.load_balancer_dns_name,
-            description="Endpoint del servicio Drupal",
-            export_name="AwsDrupalServiceStack-ServiceEndpoint"
+            description="Endpoint del servicio Drupal"
         )
-
         CfnOutput(
-            self, "RedisEndpoint",
+            self,
+            "RedisEndpoint",
             value=self.redis.attr_primary_end_point_address,
-            description="Endpoint de Redis",
-            export_name="DrupalRedisEndpoint"
+            description="Endpoint de Redis"
+        )
+        CfnOutput(
+            self,
+            "ECRRepositoryURI",
+            value=repository.repository_uri,
+            description="URI del repositorio ECR"
         )
