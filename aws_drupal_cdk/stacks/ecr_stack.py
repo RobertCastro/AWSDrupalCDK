@@ -39,19 +39,38 @@ class ECRStack(Stack):
             assumed_by=iam.ServicePrincipal("codebuild.amazonaws.com")
         )
 
-        # Agregar permisos necesarios
+        # Permisos básicos de CodeBuild
         build_role.add_managed_policy(
             iam.ManagedPolicy.from_aws_managed_policy_name("AWSCodeBuildAdminAccess")
         )
+
+        # Permisos específicos para ECR
         build_role.add_to_policy(
             iam.PolicyStatement(
                 actions=[
                     "ecr:GetAuthorizationToken",
                     "ecr:BatchCheckLayerAvailability",
+                    "ecr:BatchGetImage",
                     "ecr:CompleteLayerUpload",
-                    "ecr:UploadLayerPart",
+                    "ecr:CreateRepository",
+                    "ecr:DescribeImages",
+                    "ecr:DescribeRepositories",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:GetRepositoryPolicy",
                     "ecr:InitiateLayerUpload",
+                    "ecr:ListImages",
                     "ecr:PutImage",
+                    "ecr:UploadLayerPart"
+                ],
+                effect=iam.Effect.ALLOW,
+                resources=["*"]
+            )
+        )
+
+        # Permisos para logs
+        build_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
                     "logs:CreateLogGroup",
                     "logs:CreateLogStream",
                     "logs:PutLogEvents"
@@ -60,9 +79,23 @@ class ECRStack(Stack):
             )
         )
 
-        # Crear proyecto CodeBuild con webhook y autenticación
+        # Dar permisos pull/push al repositorio
+        self.repository.grant_pull_push(build_role)
+
+        # Configuración de GitHub
+        codebuild.GitHubSourceCredentials(
+            self, "GitHubCredentials",
+            access_token=SecretValue.secrets_manager('github-token-codebuild')
+        )
+
+        # Crear proyecto CodeBuild
         build = codebuild.Project(
             self, "DrupalImageBuild",
+            role=build_role,
+            environment=codebuild.BuildEnvironment(
+                privileged=True,
+                build_image=codebuild.LinuxBuildImage.STANDARD_7_0
+            ),
             source=codebuild.Source.git_hub(
                 owner="RobertCastro",
                 repo="AWSDrupalCDK",
@@ -75,6 +108,17 @@ class ECRStack(Stack):
                     .and_file_path_is("docker/*")
                 ]
             ),
+            environment_variables={
+                "ECR_REPO_URI": codebuild.BuildEnvironmentVariable(
+                    value=self.repository.repository_uri
+                ),
+                "AWS_DEFAULT_REGION": codebuild.BuildEnvironmentVariable(
+                    value=self.region
+                ),
+                "AWS_ACCOUNT_ID": codebuild.BuildEnvironmentVariable(
+                    value=self.account
+                )
+            },
             build_spec=codebuild.BuildSpec.from_object({
                 "version": "0.2",
                 "phases": {
@@ -112,13 +156,7 @@ class ECRStack(Stack):
             })
         )
 
-        # Configuración de GitHub
-        codebuild.GitHubSourceCredentials(
-            self, "GitHubCredentials",
-            access_token=SecretValue.secrets_manager('github-token-codebuild')
-        )
-
-        # Agregar trigger programado
+        # Trigger programado semanal
         events.Rule(
             self, "WeeklyBuildRule",
             schedule=events.Schedule.cron(
