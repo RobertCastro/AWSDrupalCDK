@@ -131,7 +131,8 @@ class ECRStack(Stack):
                             "nodejs": "18"
                         },
                         "commands": [
-                            "yum install -y jq"
+                            "apt-get update",
+                            "apt-get install -y jq"
                         ]
                     },
                     "pre_build": {
@@ -143,7 +144,9 @@ class ECRStack(Stack):
                             "echo Logging in to Docker Hub...",
                             "docker login -u $DOCKERHUB_USERNAME -p $DOCKERHUB_PASSWORD",
                             "echo Logging in to Amazon ECR...",
-                            "aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPO_URI"
+                            "aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPO_URI",
+                            "echo Directory contents:",
+                            "ls -la"
                         ]
                     },
                     "build": {
