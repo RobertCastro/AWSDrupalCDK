@@ -39,12 +39,12 @@ class ECRStack(Stack):
             assumed_by=iam.ServicePrincipal("codebuild.amazonaws.com")
         )
 
-        # Permisos básicos de CodeBuild
+        # Permisos necesarios
         build_role.add_managed_policy(
             iam.ManagedPolicy.from_aws_managed_policy_name("AWSCodeBuildAdminAccess")
         )
 
-        # Permisos específicos para ECR
+        # Permisos para ECR
         build_role.add_to_policy(
             iam.PolicyStatement(
                 actions=[
@@ -67,6 +67,15 @@ class ECRStack(Stack):
             )
         )
 
+        # Permisos para Secrets Manager
+        secret_arn = f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:dockerhub-credentials-*"
+        build_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["secretsmanager:GetSecretValue"],
+                resources=[secret_arn]
+            )
+        )
+
         # Permisos para logs
         build_role.add_to_policy(
             iam.PolicyStatement(
@@ -81,12 +90,6 @@ class ECRStack(Stack):
 
         # Dar permisos pull/push al repositorio
         self.repository.grant_pull_push(build_role)
-
-        # Configuración de GitHub
-        codebuild.GitHubSourceCredentials(
-            self, "GitHubCredentials",
-            access_token=SecretValue.secrets_manager('github-token-codebuild')
-        )
 
         # Crear proyecto CodeBuild
         build = codebuild.Project(
@@ -122,31 +125,39 @@ class ECRStack(Stack):
             build_spec=codebuild.BuildSpec.from_object({
                 "version": "0.2",
                 "phases": {
+                    "install": {
+                        "runtime-versions": {
+                            "python": "3.11",
+                            "nodejs": "18"
+                        },
+                        "commands": [
+                            "yum install -y jq"
+                        ]
+                    },
                     "pre_build": {
                         "commands": [
+                            "echo Retrieving Docker Hub credentials...",
+                            "DOCKERHUB_CREDS=$(aws secretsmanager get-secret-value --secret-id dockerhub-credentials --query SecretString --output text)",
+                            "export DOCKERHUB_USERNAME=$(echo $DOCKERHUB_CREDS | jq -r .username)",
+                            "export DOCKERHUB_PASSWORD=$(echo $DOCKERHUB_CREDS | jq -r .password)",
+                            "echo Logging in to Docker Hub...",
+                            "docker login -u $DOCKERHUB_USERNAME -p $DOCKERHUB_PASSWORD",
                             "echo Logging in to Amazon ECR...",
-                            "aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPO_URI",
-                            "echo Starting build at `date`",
-                            "ls -la",
-                            "echo Current directory structure:",
-                            "find . -type f -name 'Dockerfile'"
+                            "aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPO_URI"
                         ]
                     },
                     "build": {
                         "commands": [
                             "echo Build started on `date`",
                             "cd docker",
-                            "echo Building the Docker image...",
-                            'docker build --build-arg COMPOSER_ALLOW_SUPERUSER=1 --build-arg DRUPAL_VERSION=10.2.4 --no-cache -t $ECR_REPO_URI:latest .'
+                            "docker build --build-arg COMPOSER_ALLOW_SUPERUSER=1 --build-arg DRUPAL_VERSION=10.2.4 --no-cache -t $ECR_REPO_URI:latest ."
                         ]
                     },
                     "post_build": {
                         "commands": [
                             "echo Pushing the Docker image...",
                             "docker push $ECR_REPO_URI:latest",
-                            "echo Writing image definitions...",
-                            'printf \'{"ImageURI":"%s"}\' $ECR_REPO_URI:latest > imageDefinitions.json',
-                            "echo Push completed on `date`"
+                            'printf \'{"ImageURI":"%s"}\' $ECR_REPO_URI:latest > imageDefinitions.json'
                         ]
                     }
                 },
@@ -154,6 +165,12 @@ class ECRStack(Stack):
                     "files": ["imageDefinitions.json"]
                 }
             })
+        )
+
+        # Configuración de GitHub
+        codebuild.GitHubSourceCredentials(
+            self, "GitHubCredentials",
+            access_token=SecretValue.secrets_manager('github-token-codebuild')
         )
 
         # Trigger programado semanal
