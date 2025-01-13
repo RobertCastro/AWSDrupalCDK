@@ -62,8 +62,9 @@ RUN { \
 # Instalar Composer
 COPY --from=composer:latest /usr/bin/composer /usr/local/bin/composer
 
-# Crear directorios
-RUN mkdir -p /var/www/html/web/sites/default/files \
+# Limpiar y crear directorios
+RUN rm -rf /var/www/html/* \
+    && mkdir -p /var/www/html/web/sites/default/files \
     && mkdir -p /var/www/html/private \
     && chown -R www-data:www-data /var/www/html
 
@@ -83,9 +84,11 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=120s --retries=5 \
 WORKDIR /var/www/html
 
 # Instalar Drupal con Composer
+ENV COMPOSER_ALLOW_SUPERUSER=1
 RUN composer create-project drupal/recommended-project:10.2.4 . --no-interaction \
     && composer require drush/drush \
-    && composer clear-cache
+    && composer clear-cache \
+    && chown -R www-data:www-data /var/www/html
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["apache2-foreground"]
