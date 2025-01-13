@@ -4,6 +4,8 @@ from aws_cdk import (
     aws_ecr as ecr,
     aws_codebuild as codebuild,
     aws_iam as iam,
+    aws_events as events,
+    aws_events_targets as events_targets,
     CfnOutput,
     RemovalPolicy,
 )
@@ -58,6 +60,7 @@ class ECRStack(Stack):
         )
 
         # Crear proyecto CodeBuild
+        # Crear proyecto CodeBuild con webhook
         build = codebuild.Project(
             self, "DrupalImageBuild",
             role=build_role,
@@ -68,7 +71,14 @@ class ECRStack(Stack):
             source=codebuild.Source.git_hub(
                 owner="RobertCastro",
                 repo="AWSDrupalCDK",
-                branch_or_ref="main"
+                branch_or_ref="main",
+                webhook=True,  # Habilitar webhook
+                webhook_filters=[
+                    codebuild.FilterGroup.in_event_of(
+                        codebuild.EventAction.PUSH
+                    ).and_branch_is("main")
+                    .and_file_path_is("docker/*")  # Solo triggers en cambios en la carpeta docker
+                ]
             ),
             environment_variables={
                 "ECR_REPO_URI": codebuild.BuildEnvironmentVariable(
@@ -116,6 +126,25 @@ class ECRStack(Stack):
                     "files": ["imageDefinitions.json"]
                 }
             })
+        )
+
+        # Nuevo: Agregar un trigger programado (opcional)
+        build.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["events:PutRule", "events:PutTargets"],
+                resources=["*"]
+            )
+        )
+
+        # Trigger semanal para reconstruir la imagen
+        events.Rule(
+            self, "WeeklyBuildRule",
+            schedule=events.Schedule.cron(
+                minute="0",
+                hour="0",
+                week_day="SUN"
+            ),
+            targets=[events_targets.CodeBuildProject(build)]
         )
 
         # Outputs
