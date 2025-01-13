@@ -1,7 +1,22 @@
 # docker/Dockerfile
 # syntax=docker/dockerfile:1
 
-FROM --platform=linux/amd64 public.ecr.aws/docker/library/drupal:10.2.4-apache
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/drupal:10.2.4-apache AS builder
+
+# Instalar Composer
+COPY --from=composer:latest /usr/bin/composer /usr/local/bin/composer
+
+# Crear un directorio temporal para la instalación
+WORKDIR /app
+ENV COMPOSER_ALLOW_SUPERUSER=1
+
+# Instalar Drupal con Composer en el directorio temporal
+RUN composer create-project drupal/recommended-project:10.2.4 . --no-interaction \
+    && composer require drush/drush \
+    && composer clear-cache
+
+# Segunda etapa
+FROM public.ecr.aws/docker/library/drupal:10.2.4-apache
 
 # Instalar dependencias del sistema y PHP
 RUN apt-get update && apt-get install -y \
@@ -62,11 +77,16 @@ RUN { \
 # Instalar Composer
 COPY --from=composer:latest /usr/bin/composer /usr/local/bin/composer
 
-# Limpiar y crear directorios
+# Limpiar y preparar directorios
 RUN rm -rf /var/www/html/* \
     && mkdir -p /var/www/html/web/sites/default/files \
-    && mkdir -p /var/www/html/private \
-    && chown -R www-data:www-data /var/www/html
+    && mkdir -p /var/www/html/private
+
+# Copiar la instalación de Drupal desde la etapa de construcción
+COPY --from=builder /app/ /var/www/html/
+
+# Configurar permisos
+RUN chown -R www-data:www-data /var/www/html
 
 # Configurar Apache
 RUN a2enmod rewrite headers expires
@@ -82,13 +102,6 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=120s --retries=5 \
     CMD ["/usr/local/bin/healthcheck.sh"]
 
 WORKDIR /var/www/html
-
-# Instalar Drupal con Composer
-ENV COMPOSER_ALLOW_SUPERUSER=1
-RUN composer create-project drupal/recommended-project:10.2.4 . --no-interaction \
-    && composer require drush/drush \
-    && composer clear-cache \
-    && chown -R www-data:www-data /var/www/html
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["apache2-foreground"]
