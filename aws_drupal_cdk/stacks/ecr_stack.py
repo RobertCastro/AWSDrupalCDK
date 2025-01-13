@@ -63,11 +63,6 @@ class ECRStack(Stack):
         # Crear proyecto CodeBuild con webhook y autenticación
         build = codebuild.Project(
             self, "DrupalImageBuild",
-            role=build_role,
-            environment=codebuild.BuildEnvironment(
-                privileged=True,
-                build_image=codebuild.LinuxBuildImage.STANDARD_7_0
-            ),
             source=codebuild.Source.git_hub(
                 owner="RobertCastro",
                 repo="AWSDrupalCDK",
@@ -78,22 +73,8 @@ class ECRStack(Stack):
                         codebuild.EventAction.PUSH
                     ).and_branch_is("main")
                     .and_file_path_is("docker/*")
-                ],
-                webhook_triggers_batch_build=False,
-                # Usar el token de GitHub almacenado en Secrets Manager
-                credentials=SecretValue.secrets_manager('github-token')
+                ]
             ),
-            environment_variables={
-                "ECR_REPO_URI": codebuild.BuildEnvironmentVariable(
-                    value=self.repository.repository_uri
-                ),
-                "AWS_DEFAULT_REGION": codebuild.BuildEnvironmentVariable(
-                    value=self.region
-                ),
-                "AWS_ACCOUNT_ID": codebuild.BuildEnvironmentVariable(
-                    value=self.account
-                )
-            },
             build_spec=codebuild.BuildSpec.from_object({
                 "version": "0.2",
                 "phases": {
@@ -129,6 +110,12 @@ class ECRStack(Stack):
                     "files": ["imageDefinitions.json"]
                 }
             })
+        )
+
+        # Configuración de GitHub
+        codebuild.GitHubSourceCredentials(
+            self, "GitHubCredentials",
+            access_token=SecretValue.secrets_manager('github-token-codebuild')
         )
 
         # Agregar trigger programado
